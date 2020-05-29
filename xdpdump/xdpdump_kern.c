@@ -87,6 +87,75 @@ static __always_inline bool parse_ip6(void *data, __u64 off, void *data_end,
 	return true;
 }
 
+#ifdef  __ACTION_TX__
+static __always_inline void swap_mem(void *a, void *b, int len)
+{
+	int i;
+	char c;
+
+	for (i = 0; i < len; i++) {
+		c = ((char *)a)[i];
+		((char *)a)[i] = ((char *)b)[i];
+		((char *)b)[i] = c;
+	}
+}
+
+static __always_inline void ip_csum(struct iphdr *iph)
+{
+	int i;
+	__u32 csum = 0;
+
+	iph->check = 0;
+
+	for (i = 0; i < (int)sizeof(*iph) >> 1; i++)
+                csum += ((__u16 *)iph)[i];
+
+	iph->check = ~((csum & 0xffff) + (csum >> 16));
+}
+
+struct icmphdr {
+  __u8          type;
+  __u8          code;
+  __sum16       checksum;
+  union {
+        struct {
+                __be16  id;
+                __be16  sequence;
+        } echo;
+        __be32  gateway;
+        struct {
+                __be16  __unused;
+                __be16  mtu;
+        } frag;
+        __u8    reserved[4];
+  } un;
+};
+
+static __always_inline int ping_reply(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct ethhdr *eth = data;
+	struct iphdr *iph = (struct iphdr *)(eth + 1);
+	struct icmphdr *icmph = (struct icmphdr *)(iph + 1);
+
+	if (icmph + 1 > data_end || icmph->type == 0)
+		return XDP_PASS;
+
+	swap_mem(eth->h_dest, eth->h_source, ETH_ALEN);
+
+	iph->id = 0;
+	iph->frag_off = 0;
+	swap_mem(&iph->saddr, &iph->daddr, 4);
+	ip_csum(iph);
+
+	icmph->type = 0;
+	icmph->checksum += 8;
+
+	return XDP_TX;
+}
+#endif
+
 SEC("xdp")
 int process_packet(struct xdp_md *ctx)
 {
@@ -139,6 +208,10 @@ int process_packet(struct xdp_md *ctx)
 	#ifdef __ACTION_DROP__
 	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
 		return XDP_DROP;
+	#endif
+	#ifdef __ACTION_TX__
+	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
+		return ping_reply(ctx);
 	#endif
 	return XDP_PASS;
 }

@@ -136,6 +136,10 @@ int process_packet(struct xdp_md *ctx)
 	bpf_perf_event_output(ctx, &perf_map,
 			      (__u64)pkt.pkt_len << 32 | BPF_F_CURRENT_CPU,
 			      &pkt, sizeof(pkt));
+	#ifdef __ACTION_DROP__
+	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
+		return XDP_DROP;
+	#endif
 	return XDP_PASS;
 }
 

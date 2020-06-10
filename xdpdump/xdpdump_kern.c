@@ -209,6 +209,10 @@ int process_packet(struct xdp_md *ctx)
 	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
 		return XDP_DROP;
 	#endif
+	#ifdef __ACTION_ABORTED__
+	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
+		return XDP_ABORTED;
+	#endif
 	#ifdef __ACTION_TX__
 	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
 		return ping_reply(ctx);

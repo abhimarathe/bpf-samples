@@ -87,19 +87,7 @@ static __always_inline bool parse_ip6(void *data, __u64 off, void *data_end,
 	return true;
 }
 
-#ifdef  __ACTION_TX__
-static __always_inline void swap_mem(void *a, void *b, int len)
-{
-	int i;
-	char c;
-
-	for (i = 0; i < len; i++) {
-		c = ((char *)a)[i];
-		((char *)a)[i] = ((char *)b)[i];
-		((char *)b)[i] = c;
-	}
-}
-
+#if defined(__ACTION_TX__) || defined(__TX_FWD__)
 static __always_inline void ip_csum(struct iphdr *iph)
 {
 	int i;
@@ -130,6 +118,19 @@ struct icmphdr {
         __u8    reserved[4];
   } un;
 };
+#endif
+#ifdef  __ACTION_TX__
+static __always_inline void swap_mem(void *a, void *b, int len)
+{
+	int i;
+	char c;
+
+	for (i = 0; i < len; i++) {
+		c = ((char *)a)[i];
+		((char *)a)[i] = ((char *)b)[i];
+		((char *)b)[i] = c;
+	}
+}
 
 static __always_inline int ping_reply(struct xdp_md *ctx)
 {
@@ -151,6 +152,42 @@ static __always_inline int ping_reply(struct xdp_md *ctx)
 
 	icmph->type = 0;
 	icmph->checksum += 8;
+
+	return XDP_TX;
+}
+#endif
+#ifdef __TX_FWD__
+static __always_inline int udp_forward(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct ethhdr *eth = data;
+	struct iphdr *iph = (struct iphdr *)(eth + 1);
+	struct udphdr *udph = (struct udphdr *)(iph + 1);
+
+	//configure forwarding setup
+	unsigned char newethsrc [] = { 0x00, 0x22, 0x48, 0x4c, 0xc4, 0x4d };
+	unsigned char newethdest [] = { 0x00, 0x22, 0x48, 0x4c, 0xc0, 0xfd };
+	__u8 newsrc [] = { 10, 0, 1, 5 };
+	__u8 newdest [] = { 10, 0, 1, 4 };
+	__u16 source_port=40956;
+	__u16 dest_port=9999;
+
+	if (udph + 1 > data_end)
+		return XDP_PASS;
+
+	memcpy(eth->h_source,newethsrc,ETH_ALEN);
+	memcpy(eth->h_dest,newethdest,ETH_ALEN);
+
+	iph->id = 0;
+	iph->frag_off = 0;
+	memcpy(&iph->daddr,newdest,4);
+	memcpy(&iph->saddr,newsrc,4);
+	ip_csum(iph);
+
+	//Convert big endian to little endian
+	udph->source=(source_port>>8) | (source_port<<8);
+        udph->dest=(dest_port>>8) | (dest_port<<8);
 
 	return XDP_TX;
 }
@@ -222,6 +259,10 @@ int process_packet(struct xdp_md *ctx)
 	#ifdef __ACTION_TX__
 	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_ICMP)
 		return ping_reply(ctx);
+	#endif
+	#ifdef __TX_FWD__
+	if (pkt.l3_proto == ETH_P_IP && pkt.l4_proto == IPPROTO_UDP)
+		return udp_forward(ctx);
 	#endif
 	return XDP_PASS;
 }
